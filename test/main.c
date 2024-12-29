@@ -59,22 +59,36 @@ static int send_message(struct lws* wsi, const char* message) {
     return lws_write(wsi, p, strlen((char*)p), LWS_WRITE_TEXT);
 }
 
-// Button click handler
 static void on_button_clicked(GtkWidget* widget, gpointer data) {
-    if (players_connected < 2) return;
+    if (players_connected < 2) { // 플레이어 수 확인
+        printf("Not enough players.\n");
+        return;
+    }
+
+    // 현재 턴 검증 강화
+    if (current_turn != my_symbol) {
+        printf("Not your turn. Current Turn: %c, Your Symbol: %c\n", current_turn, my_symbol);
+        gtk_label_set_text(GTK_LABEL(status_label), "Invalid move! Wait for your turn.");
+        return;
+    }
 
     int pos = GPOINTER_TO_INT(data);
     int row = pos / 3;
     int col = pos % 3;
 
-    if (board[row][col] == 0 && current_turn == my_symbol) {
+    if (board[row][col] == 0) { // 빈 공간인지 확인
         board[row][col] = (my_symbol == 'X') ? 1 : 2;
         gtk_button_set_label(GTK_BUTTON(buttons[row][col]), (my_symbol == 'X') ? "X" : "O");
+
+        // 수 전송 로그 추가
         char msg[50];
         snprintf(msg, sizeof(msg), "MOVE %d %d %c", row, col, my_symbol);
-        printf("Button clicked: %s\n", msg); // 로그 추가
+        printf("Sending move: %s\n", msg); // 로그 추가
         send_message(web_socket, msg);
-        current_turn = (my_symbol == 'X') ? 'O' : 'X';
+
+    }
+    else {
+        gtk_label_set_text(GTK_LABEL(status_label), "Invalid move! Position already taken.");
     }
 }
 
@@ -143,30 +157,102 @@ void* websocket_thread(void* arg) {
     return NULL;
 }
 
-// Process incoming messages
-static gboolean process_queue() {
-    if (!message_queue) return TRUE;
+// 버튼 라벨 업데이트 함수
+static gboolean update_button_label(gpointer data) {
+    int pos = GPOINTER_TO_INT(data);
+    int row = pos / 3;
+    int col = pos % 3;
 
+    gtk_button_set_label(GTK_BUTTON(buttons[row][col]),
+        (board[row][col] == 1) ? "X" : "O");
+    return FALSE; // 완료 후 한 번만 실행
+}
+
+
+// 메시지 처리 함수
+static gboolean process_queue() {
     while (1) {
         char* message = (char*)g_async_queue_try_pop(message_queue);
         if (!message) break;
 
-        printf("Processing message: %s\n", message); // 로그 추가
-        int row = -1, col = -1;
-        char symbol = ' ';
-        char msg_content[256] = { 0 }; // Initialize buffer
+        printf("Processing message: %s\n", message); // 수신 메시지 로그 추가
+        int row, col;
+        char symbol;
 
-        // Game start signal processing
+        // 게임 시작 처리
         if (strstr(message, "Game starts!")) {
-            printf("Game start signal received!\n"); // 로그 추가
+            printf("Game start signal received!\n");
             players_connected = 2;
             gtk_label_set_text(GTK_LABEL(status_label), "Game started! Waiting for moves.");
         }
+        // 심볼 설정 처리
+        else if (strstr(message, "You are assigned")) {
+            char temp_symbol;
+            char* assigned_msg = strstr(message, "You are assigned");
+            if (assigned_msg && sscanf(assigned_msg, "You are assigned %c", &temp_symbol) == 1) {
+                my_symbol = temp_symbol;
+                printf("Assigned symbol: %c\n", my_symbol);
 
-        if (message) g_free(message);
+                // UI 상태 업데이트
+                gtk_label_set_text(GTK_LABEL(status_label),
+                    (my_symbol == 'X') ? "Your turn!" : "Wait for your turn!");
+            }
+            else {
+                printf("Symbol parsing failed: %s\n", message);
+            }
+        }
+        // 턴 정보 처리 (강제 동기화)
+        else if (strstr(message, "Turn")) {
+            char temp_turn;
+            char* turn_msg = strstr(message, "Turn"); // "Turn" 이후 추출
+            if (turn_msg && sscanf(turn_msg, "Turn %c", &temp_turn) == 1) {
+                current_turn = temp_turn; // 턴 동기화
+                printf("Turn updated: %c\n", current_turn); // 로그 추가
+
+                // UI 상태 업데이트
+                gtk_label_set_text(GTK_LABEL(status_label),
+                    (current_turn == my_symbol) ? "Your turn!" : "Wait for your turn!");
+            }
+            else {
+                printf("Turn parsing failed: %s\n", message); // 디버깅 로그 추가
+            }
+        }
+
+
+        // 상대방 수 처리
+        // 상대방 수 처리 (UI 동기화 추가)
+        else if (sscanf(message, "[%*s] %*s: MOVE %d %d %c", &row, &col, &symbol) == 3) {
+            printf("Move received: Row=%d, Col=%d, Symbol=%c\n", row, col, symbol);
+
+            if (board[row][col] == 0) {
+                board[row][col] = (symbol == 'X') ? 1 : 2;
+
+                // 버튼 업데이트 함수
+                g_idle_add((GSourceFunc)update_button_label, GINT_TO_POINTER(row * 3 + col));
+
+                // UI 상태 업데이트
+                current_turn = (symbol == 'X') ? 'O' : 'X';
+                printf("Board updated. New Turn: %c\n", current_turn);
+                gtk_label_set_text(GTK_LABEL(status_label),
+                    (current_turn == my_symbol) ? "Your turn!" : "Wait for your turn!");
+            }
+            else {
+                printf("Move already exists at Row=%d, Col=%d\n", row, col);
+            }
+        }
+
+        // 오류 처리
+        else if (strstr(message, "Invalid move!")) {
+            gtk_label_set_text(GTK_LABEL(status_label), "Invalid move! Wait for your turn.");
+            printf("Server: Invalid move!\n");
+        }
+
+        g_free(message);
     }
     return TRUE;
 }
+
+
 
 // Main function
 int main(int argc, char** argv) {
