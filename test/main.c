@@ -143,7 +143,7 @@ static struct lws_context* initialize_websocket() {
 
     struct lws_client_connect_info connect_info = { 0 };
     connect_info.context = context;
-    connect_info.address = "localhost";
+    connect_info.address = "192.168.55.239";
     connect_info.port = 8080;
     connect_info.path = "/";
     connect_info.host = lws_canonical_hostname(context);
@@ -217,6 +217,7 @@ static gboolean process_queue() {
         // 턴 정보 처리
         else if (strstr(message, "Turn")) {
             char temp_turn;
+
             // 정확한 위치에서 턴 정보 추출
             if (sscanf(message, "[%*[^]]] Server: Turn %c", &temp_turn) == 1) {
                 update_turn(temp_turn); // 턴과 버튼 활성화 상태 업데이트
@@ -244,7 +245,6 @@ static gboolean process_queue() {
     }
     return TRUE;
 }
-
 
 
 // Main function
